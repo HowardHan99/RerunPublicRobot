@@ -55,20 +55,38 @@ namespace Rerun
             set => m_RecordingPrefix = value;
         }
 
-        // This is the main VR rig. This should reference a Rerun prefab, containing a ReplayObject.
-        [Tooltip("This is the main VR rig. This should reference a Rerun prefab, containing a ReplayObject.")]
+        // This is the main simulation object root. This should reference a prefab or scene object containing a ReplayObject.
+        [Tooltip("The root GameObject of the simulation to be recorded. Must contain a ReplayObject component.")]
         [SerializeField]
-        private ReplayObject m_RigSource;
+        private ReplayObject m_SimulationSource;
+        
+        /// <summary>
+        /// Property for accessing the simulation source object
+        /// </summary>
+        public ReplayObject SimulationSource => m_SimulationSource;
 
-        // This is the clone VR rig, that will be replayed using data captured from the source rig.
+        // This is the clone simulation object root, that will be replayed using data captured from the source.
         // See Ultimate Replay documentation on clones.
-        [Tooltip("This is the clone VR rig, that will be replayed using data captured from the source rig.")]
+        [Tooltip("A clone GameObject of the simulation source, used for playback. Must contain a ReplayObject component.")]
         [SerializeField]
-        private ReplayObject m_RigClone;
+        private ReplayObject m_SimulationClone;
+        
+        /// <summary>
+        /// Property for accessing the simulation clone object
+        /// </summary>
+        public ReplayObject SimulationClone => m_SimulationClone;
 
         // Information about the active replay mode, name of file being recorded/played etc.
         private string m_InfoString;
-
+        
+        /// <summary>
+        /// Property for setting the info string
+        /// </summary>
+        public void SetInfoString(string value)
+        {
+            m_InfoString = value;
+            // We don't need to update the UI since RerunGUI is not being used
+        }
 
         /// <summary>
         /// String containing information about the active replay mode, name of file being recorded/played etc.
@@ -78,6 +96,10 @@ namespace Rerun
             get => m_InfoString;
         }
 
+        // Reference to our custom state manager
+        [SerializeField]
+        public RerunStateManager stateManager;
+
         public void Awake()
         {
             // Find or create a replay manager
@@ -86,33 +108,137 @@ namespace Rerun
 
             m_InfoString = "";
             if (_DontDestroyOnLoad) DontDestroyOnLoad(gameObject);
+            
+            // Ensure we have a state manager
+            EnsureStateManager();
+            
+            // Make sure object references are correct
+            ValidateSimulationReferences();
+        }
+        
+        /// <summary>
+        /// Ensures a state manager exists, creating one if necessary
+        /// </summary>
+        public void EnsureStateManager()
+        {
+            // Try to find the state manager first
+            if (stateManager == null)
+            {
+                stateManager = GetComponent<RerunStateManager>();
+                
+                // If still not found, check other objects
+                if (stateManager == null)
+                {
+                    stateManager = FindObjectOfType<RerunStateManager>();
+                    
+                    // If still not found, create a new one
+                    if (stateManager == null)
+                    {
+                        Debug.LogWarning("No RerunStateManager found in scene. Creating one now.");
+                        stateManager = gameObject.AddComponent<RerunStateManager>();
+                        
+                        // Initialize the state manager
+                        stateManager.enabled = true;
+                    }
+                }
+            }
+            
+            // Log the result
+            if (stateManager != null)
+            {
+                Debug.Log($"RerunManager using StateManager: {stateManager.name}");
+            }
+            else
+            {
+                Debug.LogError("Failed to create or find RerunStateManager!");
+            }
+        }
+        
+        /// <summary>
+        /// Gets the current state manager (useful for other scripts to find it)
+        /// </summary>
+        public RerunStateManager FindStateManager()
+        {
+            // Ensure we have a state manager
+            if (stateManager == null)
+            {
+                EnsureStateManager();
+            }
+            
+            return stateManager;
         }
 
         /// <summary>
-        /// Enter Live mode.
+        /// Validate and log the state of simulation references to help debugging
+        /// </summary>
+        private void ValidateSimulationReferences()
+        {
+            if (m_SimulationSource == null)
+            {
+                Debug.LogError("RerunManager: SimulationSource is not set!");
+            }
+            else
+            {
+                Debug.Log($"RerunManager: SimulationSource is set to {m_SimulationSource.name}");
+            }
+            
+            if (m_SimulationClone == null)
+            {
+                Debug.LogError("RerunManager: SimulationClone is not set!");
+            }
+            else
+            {
+                Debug.Log($"RerunManager: SimulationClone is set to {m_SimulationClone.name}");
+            }
+        }
+
+        /// <summary>
+        /// Enter Live mode starting from the current playback timeframe.
         /// </summary>
         public void Live()
         {
             // If recording then do nothing (recording must be stopped first)
             if (ReplayManager.IsRecording(m_RecordHandle))
             {
+                Debug.Log("Cannot switch to Live mode while recording");
                 return;
             }
 
-            // Stop all recording
-            if (ReplayManager.IsRecording(m_RecordHandle))
+            // If we have an active playback and state manager, use our enhanced Live mode
+            if (ReplayManager.IsReplaying(m_PlaybackHandle) && stateManager != null)
             {
-                StopRecording();
+                Debug.Log("Using custom state manager for Live transition");
+                // Use our custom state manager to handle the transition
+                stateManager.LiveFromCurrentPosition();
+                return;
             }
-
-            // Stop all playback
-            if (ReplayManager.IsReplaying(m_PlaybackHandle))
+            
+            // Otherwise use the traditional method
+            Debug.Log("Using traditional method for Live transition");
+            
+            // Stop playback
+            StopPlayback();
+            
+            // Activate source and deactivate clone
+            if (m_SimulationSource != null && m_SimulationSource.gameObject != null)
             {
-                StopPlayback();
+                Debug.Log($"Activating source: {m_SimulationSource.name}");
+                m_SimulationSource.gameObject.SetActive(true);
             }
-
-            m_RigSource.gameObject.SetActive(true);
-            m_RigClone.gameObject.SetActive(false);
+            else
+            {
+                Debug.LogError("[RerunManager Live] m_SimulationSource is null! Cannot set active.");
+            }
+            
+            if (m_SimulationClone != null && m_SimulationClone.gameObject != null)
+            {
+                Debug.Log($"Deactivating clone: {m_SimulationClone.name}");
+                m_SimulationClone.gameObject.SetActive(false);
+            }
+            else
+            {
+                Debug.LogError("[RerunManager Live] m_SimulationClone is null! Cannot set inactive.");
+            }
 
             m_InfoString = "Live view";
         }
@@ -129,6 +255,9 @@ namespace Rerun
             }
             else
             {
+                // --- DEBUG ---
+                Debug.Log($"[RerunManager ToggleRecording - Before Stop] m_SimulationClone is {(m_SimulationClone == null ? "NULL" : "Assigned")}");
+                // -------------
                 // Stop recording and begin playback
                 StopRecording();
                 Play();
@@ -148,7 +277,7 @@ namespace Rerun
 
             StopPlayback();
 
-            m_RerunPlaybackCameraManager.EnableCameras();
+            // m_RerunPlaybackCameraManager.EnableCameras();
 
             // Begin playback, based on target
             if (m_RecordToFile)
@@ -229,6 +358,12 @@ namespace Rerun
 
             m_FileTarget = ReplayFileTarget.ReadReplayFile(filePath);
            
+            // Load state data if we have a state manager
+            if (stateManager != null)
+            {
+                stateManager.LoadStateRecording(filePath);
+            }
+            
             Play();
         }
 
@@ -270,9 +405,43 @@ namespace Rerun
             }
            
             ReplayManager.StopRecording(ref m_RecordHandle);
-            Debug.Log("Stopped Recording with length: "+m_FileTarget.Duration);
-            m_RigClone.gameObject.SetActive(true);
-            ReplayObject.CloneReplayObjectIdentity(m_RigSource, m_RigClone);
+            if (m_FileTarget != null) 
+            {
+                Debug.Log("Stopped Recording with length: "+m_FileTarget.Duration);
+            }
+            else if (m_MemoryTarget != null)
+            {
+                 Debug.Log("Stopped Recording with length: "+m_MemoryTarget.Duration);
+            }
+            else
+            {
+                Debug.Log("Stopped Recording. Target was null, unable to get duration.");
+            }
+            
+            // --- DEBUG ---
+            Debug.Log($"[RerunManager StopRecording - Before SetActive] m_SimulationClone is {(m_SimulationClone == null ? "NULL" : "Assigned")}");
+            // -------------
+            
+            if (m_SimulationClone != null && m_SimulationClone.gameObject != null)
+            {
+                m_SimulationClone.gameObject.SetActive(true); 
+            } else {
+                 Debug.LogError("[RerunManager StopRecording] m_SimulationClone is null! Cannot set active.");
+            }
+
+            if (m_SimulationSource != null && m_SimulationClone != null)
+            {
+                ReplayObject.CloneReplayObjectIdentity(m_SimulationSource, m_SimulationClone); 
+            } else {
+                 Debug.LogError("[RerunManager StopRecording] m_SimulationSource or m_SimulationClone is null! Cannot clone identity.");
+            }
+            
+            // Stop state recording if we have a state manager
+            if (stateManager != null)
+            {
+                stateManager.StopStateRecording();
+            }
+            
             m_InfoString = "Live view";
         }
 
@@ -336,6 +505,12 @@ namespace Rerun
 
                 m_RecordHandle = ReplayManager.BeginRecording(m_FileTarget, null, false, true);
                 m_InfoString = "Recording file: " + fileName;
+                
+                // Begin state recording if we have a state manager
+                if (stateManager != null)
+                {
+                    stateManager.BeginStateRecording();
+                }
             }
             else
             {
@@ -347,6 +522,53 @@ namespace Rerun
 
                 m_RecordHandle = ReplayManager.BeginRecording(m_MemoryTarget, null, false, true);
                 m_InfoString = "Recording into memory";
+                
+                // Begin state recording if we have a state manager
+                if (stateManager != null)
+                {
+                    stateManager.BeginStateRecording();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Safely stop playback without raising exceptions
+        /// </summary>
+        public void SafeStopPlayback()
+        {
+            try
+            {
+                if (ReplayManager.IsReplaying(m_PlaybackHandle))
+                {
+                    ReplayManager.StopPlayback(ref m_PlaybackHandle);
+                    Debug.Log("Playback stopped safely");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Error stopping playback: {e.Message}");
+            }
+        }
+
+        // Add this method to hook into the default live mode transition and use our custom one instead
+        public void LiveMode()
+        {
+            Debug.Log("RerunManager.LiveMode() was called - Redirecting to custom implementation");
+            
+            // Find our custom state manager
+            RerunStateManager stateManager = GetComponent<RerunStateManager>();
+            if (stateManager != null)
+            {
+                // Use our custom implementation
+                Debug.Log("Calling custom LiveFromCurrentPosition implementation");
+                stateManager.LiveFromCurrentPosition();
+            }
+            else
+            {
+                Debug.LogWarning("RerunStateManager not found! Using traditional method for Live transition");
+                
+                // Fall back to traditional implementation
+                // TODO: Add traditional implementation here if needed
             }
         }
     }

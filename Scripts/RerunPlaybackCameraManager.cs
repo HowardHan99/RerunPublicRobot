@@ -56,7 +56,16 @@ namespace Rerun
 
                 // Disable by default
                 m_FreeCam.enabled = false;
-                m_LayoutManager.SetActive(false);
+                
+                // Add null check before accessing m_LayoutManager
+                if (m_LayoutManager != null)
+                {
+                    m_LayoutManager.SetActive(false);
+                }
+                else
+                {
+                    Debug.LogWarning("RerunPlaybackCameraManager: m_LayoutManager reference is not assigned in the inspector.");
+                }
             }
         }
 
@@ -106,7 +115,12 @@ namespace Rerun
         {
             // Exit free cam
             ExitPlaybackFreeCam();
-            m_LayoutManager.SetActive(false);
+            
+            // Add null check before accessing m_LayoutManager
+            if (m_LayoutManager != null)
+            {
+                m_LayoutManager.SetActive(false);
+            }
         }
 
         public void EnableCameras()
@@ -117,7 +131,11 @@ namespace Rerun
                 EnterPlaybackFreeCam();
             }
 
-            m_LayoutManager.SetActive(true);
+            // Add null check before accessing m_LayoutManager
+            if (m_LayoutManager != null)
+            {
+                m_LayoutManager.SetActive(true);
+            }
         }
         
 

@@ -1,0 +1,80 @@
+# In-Place Rerun State Management System Documentation
+
+This document outlines the key components and workflow for the custom in-place state management system integrated with UltimateReplay, allowing for a "Live From Current Position" feature.
+
+## Core Components
+
+1.  **`RerunStateManager.cs`**
+    *   **Role**: The central orchestrator of the state management system.
+    *   **Key Functions**:
+        *   Manages a list of all `TrackedObject` instances in the scene.
+        *   Handles the recording of states from registered `TrackedObject`s at a defined `samplingRate`.
+        *   Saves the collected state data into a custom `.rerunstate` file, named to correspond with UltimateReplay's `.replay` file.
+        *   Loads `.rerunstate` files when an UltimateReplay recording is loaded.
+        *   Implements the `LiveFromCurrentPosition()` logic:
+            *   Stops the current UltimateReplay playback.
+            *   Retrieves the recorded object states corresponding to the current playback time from the loaded `.rerunstate` file.
+            *   If no recording/state data is available for the specific time (or at all for the current context), it captures a "snapshot" of the current live states of all registered `TrackedObject`s as a fallback.
+            *   Manages the activation/deactivation of "source" vs. "clone" GameObjects if such a paradigm is used (e.g., for a main robot character). For objects without a clone (e.g., dynamically spawned pedestrians), it ensures the primary GameObject is active.
+            *   Applies the retrieved or snapshotted states to the respective `TrackedObject`s, effectively setting their transform and other properties.
+    *   **Singleton Access**: Provides a static `Instance` property (`RerunStateManager.Instance`) for easy global access from other scripts, notably `TrackedObject`.
+    *   **Dependencies**: Requires a reference to the `RerunManager` component from the UltimateReplay asset.
+    *   **Configuration**:
+        *   `Tracked Objects`: Can be partially populated in the Inspector, but primarily relies on self-registration from `TrackedObject` instances.
+        *   `Sampling Rate`: How often (in seconds) to capture state during recording (e.g., 0.1 for 10 times per second).
+        *   `State File Extension`: Defaults to `.rerunstate`.
+        *   `Enable Detailed Logging`: A crucial checkbox for debugging; provides extensive console output about the manager's operations.
+
+2.  **`TrackedObject.cs`**
+    *   **Role**: A component that must be attached to any GameObject whose state needs to be recorded and restored by the `RerunStateManager`.
+    *   **Key Functions**:
+        *   **ID Generation**: Automatically generates a unique `objectId` in its `Awake()` method if one is not pre-assigned. This ID is used to associate the GameObject with its state data. The current ID generation combines the object's hierarchy path and its instance ID for uniqueness, suitable for prefabs.
+        *   **Self-Registration**:
+            *   In `OnEnable()`, it automatically registers itself with the `RerunStateManager.Instance`. This is vital for dynamically instantiated prefabs (like wheelchairs/pedestrians) to be known by the manager.
+            *   In `OnDisable()`, it unregisters itself.
+        *   **`CaptureState(float timestamp)`**: Called by `RerunStateManager` during recording. It gathers the object's current `transform` (position, rotation, scale), Rigidbody state (velocity, angular velocity, isKinematic), and Animator state (current state hash, normalized time, speed). This is packaged into an `ObjectState` data object.
+        *   **`ApplyState(ObjectState state)`**: Called by `RerunStateManager` during the "Live From Current Position" process. It takes an `ObjectState` and applies its values back to the GameObject's transform, Rigidbody, and Animator.
+    *   **Configuration (Inspector)**:
+        *   `Object Id`: Can be left blank to auto-generate, or manually set for specific needs (ensure uniqueness if manual).
+        *   `Replay Object`: Optional reference to an UltimateReplay `ReplayObject` component if present on the same GameObject.
+        *   `Track Transform`, `Track Rigidbody`, `Track Animator`: Booleans to control which aspects of the object are recorded and restored.
+        *   `Custom Properties`: (Conceptual) A list for future extension to track script-specific variables.
+        *   `Debug Mode`: Enables detailed logging from this specific `TrackedObject` instance during `ApplyState`.
+
+3.  **State Data Structures (`ObjectState.cs`, `ObjectStateTimeline.cs`, `StateRecording.cs`, `SerializedProperty.cs`)**
+    *   **`ObjectState`**: A serializable class holding the state of a single `TrackedObject` at a specific `timestamp`. Includes `Vector3` for position/scale, `Quaternion` for rotation, and a list of `SerializedProperty` for other data like Rigidbody physics or Animator states.
+    *   **`ObjectStateTimeline`**: A serializable class that contains an `objectId` and a `List<ObjectState>` representing the recorded history of that object over the duration of a recording.
+    *   **`StateRecording`**: The top-level serializable class that is actually saved to the `.rerunstate` file. It contains the `totalDuration` of the recording and a `List<ObjectStateTimeline>` for all tracked objects. It also includes a non-serialized dictionary cache for quick state lookups by time.
+    *   **`SerializedProperty`**: A helper class to allow serialization of various common data types (float, int, bool, Vector3, Quaternion, Color, string) for custom properties within an `ObjectState`.
+
+## Workflow: "Live From Current Position"
+
+1.  **Playback Active**: The user is typically watching a replay using UltimateReplay.
+2.  **Trigger**: The user initiates the "Live From Current Position" action (e.g., via a UI button connected to `RerunStateManager.LiveFromCurrentPosition()`).
+3.  **Manager Takes Over**: `RerunStateManager.LiveFromCurrentPosition()` is executed.
+4.  **Stop Replay**: UltimateReplay playback for the current `playbackHandle` is stopped.
+5.  **Get Time**: The normalized playback time (0 to 1) is retrieved from UltimateReplay.
+6.  **Load/Capture States**:
+    *   The `RerunStateManager` attempts to use its `currentRecording` (which should have been loaded from a `.rerunstate` file when the replay started or when a recording was made).
+    *   It converts the normalized time to an absolute time within the recording's duration.
+    *   It calls `GetStateAtTime()` (or `GetStateAtNormalizedTime()`) to retrieve a dictionary of `ObjectState`s for all tracked objects, keyed by `objectId`. This involves finding the closest states in each `ObjectStateTimeline` and interpolating between them if necessary.
+    *   **Fallback**: If `currentRecording` is null or has no timelines (e.g., no `.rerunstate` file was found, or this is a fresh scene without prior recording), it calls `CaptureCurrentStatesOfAllTrackedObjects()`. This method iterates through all currently active and registered `TrackedObject`s, calls their `CaptureState(0)` method, and builds a temporary `StateRecording` snapshot.
+7.  **Object Transition (If Applicable)**:
+    *   If a source/clone paradigm is used (e.g., `SimulationSource` and `SimulationClone` are set up in `RerunManager`), the "clone" objects are typically deactivated, and "source" objects are activated.
+    *   For standalone objects (like pedestrians), this step mainly ensures the main GameObject itself is active.
+8.  **State Application**:
+    *   The `RerunStateManager` iterates through the dictionary of `ObjectState`s obtained in step 6.
+    *   For each `objectId`, it finds the corresponding `GameObject` in its `SourceObjects` dictionary (this dictionary is built by `BuildObjectMappings()` and should contain all live/source objects).
+    *   It retrieves the `TrackedObject` component from that GameObject.
+    *   It calls `trackedObject.ApplyState(state)` to apply the position, rotation, scale, and other recorded properties.
+9.  **Live Mode**: The scene is now in a live, interactive state, having visually and physically started from the conditions present at the chosen point in the replay. Information about the transition (e.g., "Live view from position X") is updated in the `RerunManager`.
+
+## Key Setup Points & Considerations
+
+*   **`TrackedObject` Component**: Essential on all GameObjects that need to be part of the in-place rerun.
+*   **Prefab Instantiation**: For objects instantiated from prefabs at runtime (e.g., pedestrians), the `TrackedObject` script's `OnEnable` self-registration with `RerunStateManager.Instance` is critical for them to be discovered and managed.
+*   **`RerunManager` Link**: The `RerunStateManager` GameObject must have a reference to your main `RerunManager` (from UltimateReplay).
+*   **`.rerunstate` Files**: These are generated alongside `.replay` files in the same directory and are crucial for restoring state from a previous recording.
+*   **Detailed Logging**: Use the "Enable Detailed Logging" checkbox on `RerunStateManager` and the "Debug Mode" on individual `TrackedObject`s for troubleshooting.
+*   **Object IDs**: Ensure `objectId`s are unique and consistently generated/assigned, especially if not relying purely on the auto-generated IDs. The current auto-generation in `TrackedObject.cs` uses hierarchy path + instance ID, which is good for unique runtime instances.
+*   **Script Execution Order**: If `TrackedObject`s might `OnEnable` before `RerunStateManager`'s `Awake` (where `Instance` is set), their initial self-registration attempt might find `Instance` as null. `RerunStateManager`'s `Start()` method includes a `FindTrackedObjects(true)` call as a fallback to catch such objects. For very complex scenarios, explicitly setting script execution order in Unity might be considered to ensure `RerunStateManager` awakes first.

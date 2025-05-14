@@ -54,4 +54,20 @@ namespace Rerun
             return Input.GetKeyDown(key);
         }
     }
+                        Debug.Log($"Created test file at: {testFilePath}");
+                    }
+                    catch (System.Exception e)
+                    {
+                        Debug.LogError($"Error creating test file: {e.Message}");
+                    }
+                }
+            }
+        }
+
+        private bool IsReplayKeyPressed(KeyCode key)
+        {
+            // Check for key press
+            return Input.GetKeyDown(key);
+        }
+    }
 }
