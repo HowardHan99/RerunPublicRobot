@@ -98,9 +98,6 @@ namespace Rerun
 
             // Disable detailed logging by default to reduce log spam
             // enableDetailedLogging = false; // Commented out to respect Inspector setting
-            
-            // Initialize for proper operation
-            Log("RerunStateManager AWAKE and Instance set.");
         }
         
         void Start()
@@ -126,37 +123,14 @@ namespace Rerun
             // Initial scan for objects that might have been in the scene before this manager awakes,
             // or if self-registration failed for some TrackedObjects.
             // Self-registration via TrackedObject.OnEnable is now the primary method for dynamic objects.
-            Log("[RerunStateManager START] Performing an initial scan for tracked objects as a fallback/safety net.");
             FindTrackedObjects(true); // Pass true to append to existing (e.g. Inspector-assigned or early self-registered)
-
-            Log($"[RerunStateManager START] After initial scan/merge, trackedObjects count: {trackedObjects.Count}");
-            foreach(var to in trackedObjects) { if(to != null) Log($"  - Currently Tracked: {to.name}, ID: {to.objectId}, ActiveInHierarchy: {to.gameObject.activeInHierarchy}"); else Log("  - Tracked: NULL OBJECT IN LIST"); }
 
             if (trackedObjects.Count > 0)
             {
                 BuildObjectMappings();
             }
-            else
-            {
-                Log("[RerunStateManager START] No tracked objects yet. Waiting for self-registration or further scan.");
-            }
             
             LoadSerializedData(); // Load any persistent state data
-            
-            if (rerunManager?.SimulationSource != null && rerunManager?.SimulationClone != null)
-            {
-                Log("Verifying simulation object structures (if applicable):");
-                // VerifyObjectStructures(rerunManager.SimulationSource.gameObject, rerunManager.SimulationClone.gameObject); // This can be very verbose
-            }
-            
-            if (trackedObjects.Count == 0)
-            {
-                Log("No TrackedObject components registered initially. State recording may not capture objects until they self-register or are found by a later scan.");
-            }
-            else
-            {
-                Log($"RerunStateManager initialized with {trackedObjects.Count} tracked objects from initial scan/assignment.");
-            }
         }
         
         /// <summary>
@@ -174,15 +148,13 @@ namespace Rerun
             if (!trackedObjects.Any(to => to.objectId == newTrackedObject.objectId))
             {
                 trackedObjects.Add(newTrackedObject);
-                Log($"[RerunStateManager] Registered new TrackedObject: {newTrackedObject.name} (ID: {newTrackedObject.objectId}). Total tracked: {trackedObjects.Count}");
                 // If a recording is in progress, we might need to initialize a timeline for it.
                 if (isRecording && ObjectTimelines != null && !ObjectTimelines.ContainsKey(newTrackedObject.objectId))
                 {
                     ObjectTimelines[newTrackedObject.objectId] = new ObjectStateTimeline { objectId = newTrackedObject.objectId, states = new List<ObjectState>() };
-                    Log($"Initialized new timeline for dynamically registered {newTrackedObject.objectId} during active recording.");
                 }
                 // Rebuild mappings if needed, or defer until next state capture/application
-                 BuildObjectMappings(); // Or a more lightweight update if possible
+                BuildObjectMappings(); // Or a more lightweight update if possible
             }
             else
             {
@@ -213,28 +185,13 @@ namespace Rerun
 
             // Remove by instance first, then by ID if instance not found (safer for general case)
             bool removed = trackedObjects.Remove(objectToRemove);
-            if (removed)
-            {
-                Log($"[RerunStateManager] Unregistered TrackedObject: {objectToRemove.name} (ID: {objectToRemove.objectId}) by instance. Total tracked: {trackedObjects.Count}");
-            }
-            else
+            if (!removed)
             {
                 // Fallback: Try removing by ID if the instance wasn't directly in the list (e.g., if it was a copy with same ID)
-                int countBefore = trackedObjects.Count;
                 trackedObjects.RemoveAll(to => to != null && to.objectId == objectToRemove.objectId);
-                if (trackedObjects.Count < countBefore)
-                {
-                    Log($"[RerunStateManager] Unregistered TrackedObject with ID: {objectToRemove.objectId} (originally on {objectToRemove.name}) by ID. Total tracked: {trackedObjects.Count}");
-                }
             }
 
-            if (ObjectTimelines != null && ObjectTimelines.ContainsKey(objectToRemove.objectId))
-            {
-                // Decide if you want to remove the timeline or keep it for unloaded objects.
-                // For now, let's keep it, as the object might re-appear.
-                // ObjectTimelines.Remove(objectToRemove.objectId);
-                Log($"Timeline data for {objectToRemove.objectId} is currently kept even after unregistration.");
-            }
+            // Timeline data is kept even after unregistration as the object might re-appear
             // Rebuild mappings if needed
             // BuildObjectMappings(); // Could be deferred
         }
@@ -247,13 +204,10 @@ namespace Rerun
             if (!append)
             {
                 trackedObjects.Clear();
-                Log("FindTrackedObjects: Cleared existing trackedObjects list (append=false).");
             }
             
             TrackedObject[] allFoundInScene = FindObjectsOfType<TrackedObject>(true); // true to include inactive
-            Log($"FindTrackedObjects: Found {allFoundInScene.Length} TrackedObject components in scene (including inactive).");
 
-            int addedCount = 0;
             foreach (var objInScene in allFoundInScene)
             {
                 if (objInScene != null)
@@ -262,19 +216,11 @@ namespace Rerun
                     if (!trackedObjects.Any(to => to == objInScene || (to != null && to.objectId == objInScene.objectId)))
                     {
                         trackedObjects.Add(objInScene);
-                        Log($"FindTrackedObjects: Added {objInScene.name} (ID: {objInScene.objectId}, Active: {objInScene.gameObject.activeInHierarchy}, Enabled: {objInScene.enabled}) to list.");
-                        addedCount++;
-                    }
-                    else
-                    {
-                         Log($"FindTrackedObjects: Skipped adding {objInScene.name} (ID: {objInScene.objectId}) as it (or its ID) is already in the list.");
                     }
                 }
             }
             // Ensure uniqueness again if append was true and might have introduced duplicates from inspector + scene scan
             if(append) trackedObjects = trackedObjects.Where(to => to != null).Distinct().ToList();
-
-            Log($"FindTrackedObjects: Added {addedCount} new objects. Final trackedObjects count: {trackedObjects.Count}");
         }
         
         /// <summary>
@@ -333,7 +279,6 @@ namespace Rerun
                     if (timeline != null && !string.IsNullOrEmpty(timeline.objectId))
                     {
                         ObjectTimelines[timeline.objectId] = timeline;
-                        Log($"Loaded timeline for {timeline.objectId} from serialized data with {timeline.states?.Count ?? 0} states.");
                     }
                 }
             }
@@ -349,7 +294,6 @@ namespace Rerun
                 try
                 {
                     currentRecording.BuildCache(); // Essential for timelineDict
-                    Log($"Loaded serialized recording with {currentRecording.timelines.Count} object timelines. Duration: {currentRecording.totalDuration}s. TimelineDict has {currentRecording.timelineDict?.Count ?? 0} entries.");
                 }
                 catch (System.Exception e)
                 {
@@ -359,7 +303,6 @@ namespace Rerun
             }
             else
             {
-                Log("No serializedRecording data found on load.");
                 // Initialize currentRecording if it's null and we expect to use it
                 currentRecording = new StateRecording(); 
             }
@@ -380,7 +323,6 @@ namespace Rerun
                 {
                     serializedObjectTimelines.Add(timeline);
                 }
-                Log($"Updated serializedObjectTimelines with {serializedObjectTimelines.Count} timelines.");
             }
             
             // Update the serialized recording
@@ -388,14 +330,12 @@ namespace Rerun
             if (currentRecording != null) 
             {
                  serializedRecording = currentRecording;
-                 Log($"Updated serializedRecording. Total Duration: {serializedRecording.totalDuration}, Timelines: {serializedRecording.timelines?.Count ?? 0}");
             }
             else
             {
                 // If currentRecording is null, ensure serializedRecording is also nulled or empty
                 // to reflect this in the inspector, or initialized to an empty recording.
                 serializedRecording = new StateRecording(); // Or null, depending on desired Inspector representation
-                Log("currentRecording is null, serializedRecording updated to empty/null.");
             }
         }
         
@@ -420,6 +360,7 @@ namespace Rerun
         /// </summary>
         private void Log(string message)
         {
+            // Logs disabled by default to reduce log spam
             if (enableDetailedLogging)
             {
                 Debug.Log("[RerunStateManager] " + message);
@@ -436,32 +377,24 @@ namespace Rerun
             
             // DO NOT call FindTrackedObjects directly - it creates an infinite loop
             
-            Log("===== STARTING OBJECT MAPPING =====");
-            
             // First pass - categorize objects as source or clone
             foreach (TrackedObject tracked in trackedObjects)
             {
                 if (tracked == null || !tracked.gameObject.activeInHierarchy) 
                 {
-                    // Skip inactive objects for now but log them
-                    Log($"Skipping inactive or null object during mapping");
+                    // Skip inactive objects
                     continue;
                 }
                 
                 bool isSource = IsSourceObject(tracked.gameObject);
-                string objectPath = GetObjectHierarchyPath(tracked.gameObject);
-                
-                Log($"Object: {tracked.objectId} | Path: {objectPath} | IsSource: {isSource}");
                 
                 if (isSource)
                 {
                     SourceObjects[tracked.objectId] = tracked.gameObject;
-                    Log($"Added to SOURCE objects: {tracked.objectId}");
                 }
                 else
                 {
                     CloneObjects[tracked.objectId] = tracked.gameObject;
-                    Log($"Added to CLONE objects: {tracked.objectId}");
                 }
             }
             
@@ -475,8 +408,6 @@ namespace Rerun
             // If we have unmatched objects, try to match them by their path
             if (unmatchedSourceIds.Count > 0 && unmatchedCloneIds.Count > 0)
             {
-                Log($"Attempting to match {unmatchedSourceIds.Count} source objects with {unmatchedCloneIds.Count} clone objects by path similarity");
-                
                 Dictionary<string, string> sourcePaths = new Dictionary<string, string>();
                 Dictionary<string, string> clonePaths = new Dictionary<string, string>();
                 
@@ -526,7 +457,6 @@ namespace Rerun
                         TrackedObject cloneTracked = CloneObjects[bestMatchingCloneId].GetComponent<TrackedObject>();
                         
                         // Update the clone's ID to match the source for future lookups
-                        Log($"Matching objects by path similarity: Source={sourceId}, Clone={bestMatchingCloneId} (similarity: {bestMatch:P})");
                         cloneTracked.objectId = sourceTracked.objectId;
                         
                         // Update the mapping
@@ -538,31 +468,6 @@ namespace Rerun
                     }
                 }
             }
-            
-            // Verify mapping by logging object pairs
-            Log("===== VERIFYING OBJECT PAIRS =====");
-            foreach (var sourceEntry in SourceObjects)
-            {
-                string sourceId = sourceEntry.Key;
-                if (CloneObjects.TryGetValue(sourceId, out GameObject cloneObj))
-                {
-                    Log($"MATCHED PAIR: {sourceId} | Source: {GetObjectHierarchyPath(sourceEntry.Value)} | Clone: {GetObjectHierarchyPath(cloneObj)}");
-                }
-                else
-                {
-                    Log($"UNPAIRED SOURCE: {sourceId} | No matching clone found");
-                }
-            }
-            
-            foreach (var cloneEntry in CloneObjects)
-            {
-                if (!SourceObjects.ContainsKey(cloneEntry.Key))
-                {
-                    Log($"UNPAIRED CLONE: {cloneEntry.Key} | No matching source found");
-                }
-            }
-            
-            Log($"Final mapping: {SourceObjects.Count} source objects and {CloneObjects.Count} clone objects");
         }
         
         /// <summary>
@@ -678,29 +583,21 @@ namespace Rerun
             // Clear previous data
             ObjectTimelines.Clear();
             
-            Log($"BeginStateRecording: Current trackedObjects count: {trackedObjects.Count}");
-            foreach(var to in trackedObjects) { if(to != null) Log($"  - Will initialize timeline for: {to.name}, ID: {to.objectId}"); else Log("  - NULL object in trackedObjects list at BeginStateRecording"); }
-
             // Initialize timelines for each tracked object
-            Log($"BeginStateRecording: Found {trackedObjects.Count} tracked objects to initialize timelines for.");
             foreach (TrackedObject obj in trackedObjects)
             {
                 if (obj == null || string.IsNullOrEmpty(obj.objectId)) 
                 {
-                    Log($"Skipping null or ID-less TrackedObject: {obj?.name}");
                     continue;
                 }
                 
                 // All tracked objects should have a timeline for potential recording
                 ObjectTimelines[obj.objectId] = new ObjectStateTimeline { objectId = obj.objectId, states = new List<ObjectState>() };
-                Log($"Initialized timeline for {obj.objectId} ({obj.name})");
             }
             
             recordingStartTime = Time.time;
             lastSampleTime = recordingStartTime;
             isRecording = true;
-            
-            Log($"Started state recording with {ObjectTimelines.Count} timelines initialized.");
         }
         
         /// <summary>
@@ -730,8 +627,6 @@ namespace Rerun
             UpdateSerializedData();
             
             SaveStateRecording();
-            
-            Log("Stopped state recording");
         }
         
         /// <summary>
@@ -740,21 +635,17 @@ namespace Rerun
         private void RecordCurrentState()
         {
             float timestamp = Time.time - recordingStartTime;
-            Log($"Recording state at timestamp: {timestamp:F3}");
             
-            int countRecorded = 0;
-            // MODIFIED: Record all active tracked objects, not just "source" ones.
+            // Record all active tracked objects, not just "source" ones.
             foreach (TrackedObject obj in trackedObjects)
             {
                 if (obj == null || !obj.gameObject.activeInHierarchy || string.IsNullOrEmpty(obj.objectId))
                 {
-                    Log($"Skipping inactive/null/ID-less object for recording: {obj?.name}");
                     continue;
                 }
                 
                 // Capture the current state
                 ObjectState state = obj.CaptureState(timestamp);
-                Log($"Captured state for {obj.objectId} ({obj.name}) at pos {state.position}");
                 
                 // Add to timeline
                 if (ObjectTimelines.TryGetValue(obj.objectId, out ObjectStateTimeline timeline))
@@ -763,15 +654,12 @@ namespace Rerun
                         timeline.states = new List<ObjectState>();
                         
                     timeline.states.Add(state);
-                    countRecorded++;
                 }
                 else
                 {
                     Debug.LogWarning($"Could not find timeline for {obj.objectId} during RecordCurrentState. This should not happen if BeginStateRecording worked correctly.");
                 }
             }
-            
-            Log($"Recorded {countRecorded} object states at time {timestamp:F3}");
         }
         
         /// <summary>
@@ -791,24 +679,16 @@ namespace Rerun
             
             string stateFilePath = Path.ChangeExtension(replayFilePath, stateFileExtension);
             
-            // Log the absolute path for easier debugging
-            string absolutePath = Path.GetFullPath(stateFilePath);
-            Debug.Log($"STORING STATE FILE AT: {absolutePath}");
-            
             // Create the directory if it doesn't exist
             string directory = Path.GetDirectoryName(stateFilePath);
             if (!Directory.Exists(directory) && !string.IsNullOrEmpty(directory))
             {
-                Debug.Log($"Creating directory: {directory}");
                 Directory.CreateDirectory(directory);
             }
             
             // Serialize to JSON
             string json = JsonUtility.ToJson(currentRecording, true);
             File.WriteAllText(stateFilePath, json);
-            
-            Debug.Log($"Saved state recording to {stateFilePath}");
-            Log($"State recording data: {json.Substring(0, Mathf.Min(200, json.Length))}..."); // Log a sample
         }
         
         /// <summary>
@@ -817,10 +697,6 @@ namespace Rerun
         public void LoadStateRecording(string replayFilePath)
         {
             string stateFilePath = Path.ChangeExtension(replayFilePath, stateFileExtension);
-            
-            // Log the absolute path for easier debugging
-            string absolutePath = Path.GetFullPath(stateFilePath);
-            Debug.Log($"ATTEMPTING TO LOAD STATE FILE FROM: {absolutePath}");
             
             if (!File.Exists(stateFilePath))
             {
@@ -832,15 +708,12 @@ namespace Rerun
             try
             {
                 string json = File.ReadAllText(stateFilePath);
-                Debug.Log($"Read .rerunstate file with content: {json.Substring(0, Mathf.Min(200, json.Length))}...");
                 
                 currentRecording = JsonUtility.FromJson<StateRecording>(json);
                 currentRecording.BuildCache();
                 
                 // Update serialized data for inspector viewing
                 UpdateSerializedData();
-                
-                Log($"Loaded state recording from {stateFilePath} with {currentRecording.timelines.Count} object timelines");
             }
             catch (System.Exception e)
             {
@@ -1015,9 +888,6 @@ namespace Rerun
         /// </summary>
         public void LiveFromCurrentPosition()
         {
-            Debug.Log("===== STARTING LIVE FROM CURRENT POSITION (CUSTOM METHOD) =====");
-            Debug.Log("Using custom state-based live transition method");
-            
             if (rerunManager == null)
             {
                 Debug.LogError("RerunStateManager: RerunManager reference is null!");
@@ -1034,13 +904,10 @@ namespace Rerun
             float normalizedTime = ReplayManager.GetPlaybackTimeNormalized(rerunManager.playbackHandle);
             ReplayTime playbackTime = ReplayManager.GetPlaybackTime(rerunManager.playbackHandle);
             
-            Debug.Log($"===== LIVE FROM POSITION: {normalizedTime:F3} ({ReplayTime.GetCorrectedTimeValueString(playbackTime.Time)}) =====");
-            
             // Validate recording data
             if (currentRecording == null)
             {
-                Debug.LogWarning("No state recording available. Attempting to capture current live states...");
-                // MODIFIED: Fallback to capturing current states of ALL active tracked objects
+                // Fallback to capturing current states of ALL active tracked objects
                 // This handles cases where there's no recording file or pedestrians without clones.
                 currentRecording = CaptureCurrentStatesOfAllTrackedObjects();
 
@@ -1049,13 +916,11 @@ namespace Rerun
                      Debug.LogError("Failed to capture current live states. Cannot transition to live mode.");
                      return;
                 }
-                Debug.Log($"Created a temporary recording from current live states with {currentRecording.timelines.Count} timelines. Duration: {currentRecording.totalDuration}s");
             }
             
             // Ensure the currentRecording's cache is built, especially if it was just created or loaded
             if (currentRecording.timelineDict == null || currentRecording.timelineDict.Count == 0)
             {
-                Log("Building cache for currentRecording as it seems to be missing or empty.");
                 currentRecording.BuildCache();
             }
 
@@ -1065,12 +930,8 @@ namespace Rerun
                 return;
             }
             
-            Debug.Log($"Current recording info: Duration={currentRecording.totalDuration:F2}s, Timelines={currentRecording.timelines.Count}");
-            
             // Get the current state of all objects
             Dictionary<string, ObjectState> states = GetStateAtNormalizedTime(normalizedTime);
-            
-            Debug.Log($"Found {states.Count} states at normalized time {normalizedTime:F3}");
             
             if (states.Count == 0)
             {
@@ -1084,19 +945,6 @@ namespace Rerun
                     Debug.LogError("Failed to create states from clone objects. Cannot proceed.");
                     return;
                 }
-                
-                Debug.Log($"Created {states.Count} states from clone objects as fallback");
-            }
-            
-            // Log a sample of states for debugging
-            int count = 0;
-            foreach (var pair in states)
-            {
-                if (count < 3) // Only log a few samples
-                {
-                    Debug.Log($"State sample [{count}]: ObjectID={pair.Key}, Position={pair.Value.position}, Timestamp={pair.Value.timestamp:F3}");
-                }
-                count++;
             }
             
             // Start coroutine to apply states with proper timing
@@ -1108,7 +956,6 @@ namespace Rerun
         /// </summary>
         private void CreateBasicRecordingFromClone() //This method might be obsolete or less used now
         {
-            Debug.Log("CreateBasicRecordingFromClone() called. Consider using CaptureCurrentStatesOfAllTrackedObjects() instead.");
             Dictionary<string, ObjectState> cloneStates = CaptureCloneStates();
             
             if (cloneStates.Count == 0)
@@ -1139,8 +986,6 @@ namespace Rerun
             };
             
             currentRecording.BuildCache();
-            
-            Debug.Log($"Created basic recording with {timelines.Count} timelines");
         }
         
         /// <summary>
@@ -1148,7 +993,6 @@ namespace Rerun
         /// </summary>
         private Dictionary<string, ObjectState> CaptureCloneStates() // This method might be obsolete or less used now
         {
-            Debug.Log("CaptureCloneStates() called. This is likely for paired objects only.");
             Dictionary<string, ObjectState> states = new Dictionary<string, ObjectState>();
             
             if (rerunManager?.SimulationClone == null)
@@ -1167,8 +1011,6 @@ namespace Rerun
                 // Capture state
                 ObjectState state = tracked.CaptureState(0f);
                 states[tracked.objectId] = state;
-                
-                Debug.Log($"Captured state from clone object: {tracked.name}, ID: {tracked.objectId}, Position: {state.position}");
             }
             
             if (states.Count == 0)
@@ -1193,8 +1035,6 @@ namespace Rerun
                     // Now capture the state
                     ObjectState state = tracked.CaptureState(0f);
                     states[tracked.objectId] = state;
-                    
-                    Debug.Log($"Added TrackedObject and captured state: {tracked.name}, ID: {tracked.objectId}, Position: {state.position}");
                 }
             }
             
@@ -1202,12 +1042,11 @@ namespace Rerun
         }
         
         /// <summary>
-        /// NEW METHOD: Captures the current state of all active TrackedObjects.
+        /// Captures the current state of all active TrackedObjects.
         /// This is a more general fallback than CreateBasicRecordingFromClone.
         /// </summary>
         private StateRecording CaptureCurrentStatesOfAllTrackedObjects()
         {
-            Log("Capturing current states of all active TrackedObjects...");
             List<ObjectStateTimeline> timelines = new List<ObjectStateTimeline>();
             float currentTime = 0f; // Or use Time.time if a global timestamp makes sense here
 
@@ -1215,7 +1054,6 @@ namespace Rerun
             {
                 if (tracked == null || !tracked.gameObject.activeInHierarchy || string.IsNullOrEmpty(tracked.objectId))
                 {
-                    Log($"Skipping inactive/null/ID-less object {tracked?.name} for live state capture.");
                     continue;
                 }
 
@@ -1227,7 +1065,6 @@ namespace Rerun
                     states = new List<ObjectState> { state }
                 };
                 timelines.Add(timeline);
-                Log($"Captured live state for {tracked.objectId} ({tracked.name})");
             }
 
             if (timelines.Count == 0)
@@ -1242,7 +1079,6 @@ namespace Rerun
                 timelines = timelines
             };
             recording.BuildCache(); // Important!
-            Log($"Created snapshot recording with {timelines.Count} timelines.");
             return recording;
         }
         
@@ -1252,16 +1088,11 @@ namespace Rerun
         private IEnumerator ApplyStatesAfterDelay(Dictionary<string, ObjectState> states, ReplayTime playbackTime, float normalizedTime)
         {
             // Stop playback
-            Debug.Log("Stopping playback");
             rerunManager.SafeStopPlayback();
             
             // Wait for a frame to ensure everything is processed
-            Debug.Log("Waiting for frame to process...");
             yield return null;
             yield return null; // Add an extra frame for stability
-            
-            // Switch to source objects with careful object activation sequence
-            Debug.Log("===== SWITCHING OBJECTS =====");
             
             // Collect important references before making any changes
             GameObject sourceObj = rerunManager.SimulationSource?.gameObject;
@@ -1279,40 +1110,20 @@ namespace Rerun
                 yield break;
             }
             
-            // Log hierarchies
-            Debug.Log($"SOURCE hierarchy: {GetObjectHierarchyPath(sourceObj)}");
-            Debug.Log($"CLONE hierarchy: {GetObjectHierarchyPath(cloneObj)}");
-            
-            // Check active states before transition
-            Debug.Log($"Before switching - Source active: {sourceObj.activeInHierarchy}, Clone active: {cloneObj.activeInHierarchy}");
-            
-            // Step 1: Make sure the clone exists before trying to deactivate it
+            // Step 1: Deactivate the clone
             if (cloneObj != null)
             {
-                // Store the state of the clone for verification
-                Transform cloneTransform = cloneObj.transform;
-                Vector3 clonePosition = cloneTransform.position;
-                Quaternion cloneRotation = cloneTransform.rotation;
-                
-                Debug.Log($"Deactivating clone: {cloneObj.name} at position {clonePosition}, rotation {cloneRotation.eulerAngles}");
                 cloneObj.SetActive(false);
                 
-                // Verify it was deactivated
                 if (cloneObj.activeInHierarchy)
                 {
                     Debug.LogError("Failed to deactivate clone! It's still active.");
                 }
-                else
-                {
-                    Debug.Log("Successfully deactivated clone");
-                }
             }
             
-            // Step 2: Make sure the source exists before trying to activate it
+            // Step 2: Activate the source
             if (sourceObj != null)
             {
-                Debug.Log($"Activating source: {sourceObj.name}");
-                
                 // Store the state before activation for verification
                 Vector3 sourcePositionBefore = sourceObj.transform.position;
                 Quaternion sourceRotationBefore = sourceObj.transform.rotation;
@@ -1324,10 +1135,6 @@ namespace Rerun
                 if (!sourceObj.activeInHierarchy)
                 {
                     Debug.LogError("Source activation failed! Object is still inactive.");
-                }
-                else
-                {
-                    Debug.Log("Source activation successful");
                 }
                 
                 // Verify position and rotation haven't unexpectedly changed
@@ -1346,25 +1153,14 @@ namespace Rerun
             }
             
             // Wait for another frame to ensure activation is fully processed
-            Debug.Log("Waiting for activation to be fully processed...");
             yield return null;
             yield return null; // Add an extra frame for stability
             
-            // Check object states after switching
-            Debug.Log($"After switching - Source active: {sourceObj.activeInHierarchy}, Clone active: {cloneObj.activeInHierarchy}");
-            
             // Rebuild object mappings to ensure we have correct references
-            // This should correctly identify source objects (paired or standalone)
-            Debug.Log("Rebuilding object mappings to ensure correct references for state application.");
             FindTrackedObjects(); // Refresh the list of all tracked objects first
             BuildObjectMappings(); // Then map them
             
-            // Check if we still have valid references to source objects
-            // SourceObjects should now contain all objects that are "live"
-            Debug.Log($"After rebuild: {SourceObjects.Count} source objects and {CloneObjects.Count} clone objects. Tracked objects: {trackedObjects.Count}");
-            
-            // Apply states to source objects - more detailed process
-            Debug.Log("===== APPLYING STATES TO SOURCE OBJECTS =====");
+            // Apply states to source objects
             int appliedCount = 0;
             int failedCount = 0;
             int skippedCount = 0;
@@ -1374,16 +1170,11 @@ namespace Rerun
                 string objectId = pair.Key;
                 ObjectState state = pair.Value;
                 
-                Debug.Log($"Trying to apply state for {objectId} (Source/Standalone)");
-                
-                // MODIFIED: We apply state to objects in SourceObjects,
-                // which should include standalone pedestrians if BuildObjectMappings handles them.
                 if (SourceObjects.TryGetValue(objectId, out GameObject targetObj))
                 {
                     // Verify the source object is active
                     if (!targetObj.activeInHierarchy)
                     {
-                        Debug.LogWarning($"Source object {targetObj.name} is not active in hierarchy. Attempting to activate.");
                         targetObj.SetActive(true);
                         
                         if (!targetObj.activeInHierarchy)
@@ -1399,25 +1190,7 @@ namespace Rerun
                     {
                         try
                         {
-                            // Log initial transform state
-                            Debug.Log($"Before state application - {targetObj.name}: " +
-                                     $"pos={targetObj.transform.position}, " +
-                                     $"rot={targetObj.transform.rotation.eulerAngles}, " +
-                                     $"scale={targetObj.transform.localScale}");
-                            
-                            // Apply the state
-                            Debug.Log($"Applying state to {targetObj.name}: " +
-                                     $"pos={state.position}, " +
-                                     $"rot={state.rotation.eulerAngles}, " +
-                                     $"scale={state.scale}");
-                            
                             trackedObj.ApplyState(state);
-                            
-                            // Verify the state was applied
-                            Debug.Log($"After applying state: " +
-                                     $"pos={targetObj.transform.position}, " +
-                                     $"rot={targetObj.transform.rotation.eulerAngles}, " +
-                                     $"scale={targetObj.transform.localScale}");
                             
                             // Check for position/rotation differences
                             float positionDiff = Vector3.Distance(targetObj.transform.position, state.position);
@@ -1451,9 +1224,6 @@ namespace Rerun
             }
             
             string timeString = ReplayTime.GetCorrectedTimeValueString(playbackTime.Time);
-            Debug.Log($"===== LIVE MODE TRANSITION COMPLETE =====");
-            Debug.Log($"RerunStateManager: Switched to Live mode at position {timeString} " +
-                     $"(applied: {appliedCount}, failed: {failedCount}, skipped: {skippedCount})");
             
             // Update info string in RerunManager
             rerunManager.SetInfoString($"Live view (from position: {timeString})");
@@ -1464,8 +1234,6 @@ namespace Rerun
                 Debug.LogWarning($"Some state applications failed ({failedCount}) or were skipped ({skippedCount}). The live view may not be accurate.");
             }
             
-            // Final source object check
-            Debug.Log($"Final source object active state: {sourceObj.activeInHierarchy}");
             if (!sourceObj.activeInHierarchy)
             {
                 Debug.LogError("Source object is inactive at the end of the transition! This is unexpected.");
